@@ -90,14 +90,24 @@ function createVao(gl, program, attributes) {
     }
 
     // Tell gl how to get attribute data out of the buffer
-    gl.vertexAttribPointer(
-      attribLocation, // Where the attribute is to be bound.
-      attribute.size, // How many components per iteration.
-      attribute.type, // What datatype to use.
-      attribute.normalize || false, // Convert from 0-255 to 0.0-1.0?
-      attribute.stride || 0, // stride * sizeof(type) each iteration to get the next element
-      attribute.offset || 0 // Offset into the buffer.
-    );
+    if (attribute.forceInt) {
+      gl.vertexAttribIPointer(
+        attribLocation, // Where the attribute is to be bound.
+        attribute.size, // How many components per iteration.
+        attribute.type, // What datatype to use.
+        attribute.stride || 0, // stride * sizeof(type) each iteration to get the next element
+        attribute.offset || 0 // Offset into the buffer.
+      );
+    } else {
+      gl.vertexAttribPointer(
+        attribLocation, // Where the attribute is to be bound.
+        attribute.size, // How many components per iteration.
+        attribute.type, // What datatype to use.
+        attribute.normalize || false, // Convert from 0-255 to 0.0-1.0?
+        attribute.stride || 0, // stride * sizeof(type) each iteration to get the next element
+        attribute.offset || 0 // Offset into the buffer.
+      );
+    }
   });
 
   return vao;
@@ -123,27 +133,27 @@ resizeViewport(gl);
 window.addEventListener("resize", _ => resizeViewport(gl));
 
 var BATCH_SIZE = 1024;
-var numFs = BATCH_SIZE * 18;
+var numFs = BATCH_SIZE * 5;
 
 var vertexShaderSource = `#version 300 es
 // an attribute is an input (in) to a vertex shader.
 // It will receive data from a buffer
 in vec4 a_position;
 in vec4 a_color;
+in uint a_instance;
 
 // A matrix to transform the positions by
 uniform Model {
   mat4 matrix[${BATCH_SIZE}];
 } u_model;
 
-uniform uint u_index;
 uniform mat4 u_view;
 // a varying the color to the fragment shader
 out vec4 v_color;
 // all shaders have a main function
 void main() {
   // Multiply the position by the matrix.
-  gl_Position = u_view * u_model.matrix[u_index] * a_position;
+  gl_Position = u_view * u_model.matrix[a_instance] * a_position;
   // Pass the color to the fragment shader.
   v_color = a_color;
 }
@@ -164,34 +174,17 @@ var program = createProgram(
   vertexShaderSource,
   fragmentShaderSource,
   {
+    instance: "a_instance",
     position: "a_position",
     color: "a_color"
   },
   {
-    view: "u_view",
-    index: "u_index"
+    view: "u_view"
   },
   {
     model: "Model"
   }
 );
-
-var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
-
-var vao = createVao(gl, program, {
-  position: {
-    buffer,
-    size: 3,
-    type: gl.FLOAT
-  },
-  color: {
-    buffer,
-    size: 3,
-    type: gl.UNSIGNED_BYTE,
-    normalize: true,
-    offset: FModel.colorsBufferView.byteOffset
-  }
-});
 
 // First let's make some variables
 // to hold the translation
@@ -204,13 +197,14 @@ var viewMatrix = mat4.create();
 mat4.perspective(viewMatrix, fieldOfViewRadians, aspect, zNear, zFar);
 
 var uniformBlockSize = program.uniformBlocks.model.size;
-console.log(uniformBlockSize);
 var uniformPerSceneBuffer = gl.createBuffer();
 gl.bindBuffer(gl.UNIFORM_BUFFER, uniformPerSceneBuffer);
 gl.bufferData(gl.UNIFORM_BUFFER, uniformBlockSize, gl.DYNAMIC_DRAW);
 
 var typedArray = new Float32Array(numFs * 16);
 var modelMatrices = [];
+var vaos = [];
+
 for (var i = 0; i < numFs; i++) {
   var translation = vec3.create();
   vec3.set(
@@ -231,6 +225,41 @@ for (var i = 0; i < numFs; i++) {
   typedArray.set(modelMatrix, i * 16);
 
   modelMatrices.push(typedArray.subarray(i * 16, i * 16 + 16));
+
+  var instanceId = i % BATCH_SIZE;
+  var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
+  var instanceIds = new Uint32Array(
+    new Array(FModel.positions.length).fill(instanceId)
+  );
+  var instanceBuffer = createBuffer(
+    gl,
+    instanceIds,
+    gl.ARRAY_BUFFER,
+    gl.STATIC_DRAW
+  );
+
+  vaos.push(
+    createVao(gl, program, {
+      instance: {
+        buffer: instanceBuffer,
+        size: 1,
+        type: gl.UNSIGNED_INT,
+        forceInt: true
+      },
+      position: {
+        buffer,
+        size: 3,
+        type: gl.FLOAT
+      },
+      color: {
+        buffer,
+        size: 3,
+        type: gl.UNSIGNED_BYTE,
+        normalize: true,
+        offset: FModel.colorsBufferView.byteOffset
+      }
+    })
+  );
 }
 
 var mvpMatrix = mat4.create();
@@ -242,8 +271,6 @@ gl.uniformMatrix4fv(program.uniformLocations.view, false, viewMatrix);
 function render() {
   requestAnimationFrame(render);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-  //var start = performance.now();
 
   for (var i = 0; i < numFs; i++) {
     var matrix = modelMatrices[i];
@@ -268,13 +295,11 @@ function render() {
     );
 
     for (var j = 0; j < BATCH_SIZE; j++) {
-      gl.bindVertexArray(vao);
-      gl.uniform1ui(program.uniformLocations.index, j);
+      var fIndex = batch * BATCH_SIZE + j;
+      gl.bindVertexArray(vaos[fIndex]);
       gl.drawArrays(gl.TRIANGLES, 0, 16 * 6);
     }
   }
-
-  //console.log(performance.now() - start);
 }
 
 render();
