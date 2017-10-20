@@ -15,7 +15,8 @@ function createProgram(
   vertexShaderSource,
   fragmentShaderSource,
   attributes,
-  uniforms
+  uniforms,
+  uniformBlocks
 ) {
   var glProgram = glUtils.createProgramFromSources(
     gl,
@@ -35,10 +36,28 @@ function createProgram(
     uniformLocations[key] = gl.getUniformLocation(glProgram, uniform);
   });
 
+  var _uniformBlocks = {};
+
+  Object.entries(uniformBlocks).forEach(([key, uniformBlock], i) => {
+    var index = gl.getUniformBlockIndex(glProgram, uniformBlock);
+    gl.uniformBlockBinding(glProgram, location, i);
+    var size = gl.getActiveUniformBlockParameter(
+      glProgram,
+      index,
+      gl.UNIFORM_BLOCK_DATA_SIZE
+    );
+    _uniformBlocks[key] = {
+      index,
+      bindingPoint: i,
+      size //: gl.getParameter(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT)
+    };
+  });
+
   return {
     glProgram,
     attribLocations,
-    uniformLocations
+    uniformLocations,
+    uniformBlocks: _uniformBlocks
   };
 }
 
@@ -103,19 +122,28 @@ gl.enable(gl.CULL_FACE);
 resizeViewport(gl);
 window.addEventListener("resize", _ => resizeViewport(gl));
 
+var BATCH_SIZE = 1024;
+var numFs = BATCH_SIZE * 18;
+
 var vertexShaderSource = `#version 300 es
 // an attribute is an input (in) to a vertex shader.
 // It will receive data from a buffer
 in vec4 a_position;
 in vec4 a_color;
+
 // A matrix to transform the positions by
-uniform mat4 u_matrix;
+uniform Model {
+  mat4 matrix[${BATCH_SIZE}];
+} u_model;
+
+uniform uint u_index;
+uniform mat4 u_view;
 // a varying the color to the fragment shader
 out vec4 v_color;
 // all shaders have a main function
 void main() {
   // Multiply the position by the matrix.
-  gl_Position = u_matrix * a_position;
+  gl_Position = u_view * u_model.matrix[u_index] * a_position;
   // Pass the color to the fragment shader.
   v_color = a_color;
 }
@@ -140,7 +168,11 @@ var program = createProgram(
     color: "a_color"
   },
   {
-    matrix: "u_matrix"
+    view: "u_view",
+    index: "u_index"
+  },
+  {
+    model: "Model"
   }
 );
 
@@ -171,9 +203,15 @@ var fieldOfViewRadians = degToRad(60);
 var viewMatrix = mat4.create();
 mat4.perspective(viewMatrix, fieldOfViewRadians, aspect, zNear, zFar);
 
-var modelMatrices = [];
+var uniformBlockSize = program.uniformBlocks.model.size;
+console.log(uniformBlockSize);
+var uniformPerSceneBuffer = gl.createBuffer();
+gl.bindBuffer(gl.UNIFORM_BUFFER, uniformPerSceneBuffer);
+gl.bufferData(gl.UNIFORM_BUFFER, uniformBlockSize, gl.DYNAMIC_DRAW);
 
-for (var i = 0; i < 3000; i++) {
+var typedArray = new Float32Array(numFs * 16);
+var modelMatrices = [];
+for (var i = 0; i < numFs; i++) {
   var translation = vec3.create();
   vec3.set(
     translation,
@@ -190,38 +228,53 @@ for (var i = 0; i < 3000; i++) {
 
   var modelMatrix = mat4.create();
   mat4.fromRotationTranslationScale(modelMatrix, rotation, translation, scale);
-  modelMatrices[i] = modelMatrix;
+  typedArray.set(modelMatrix, i * 16);
+
+  modelMatrices.push(typedArray.subarray(i * 16, i * 16 + 16));
 }
 
 var mvpMatrix = mat4.create();
 
-function drawF(matrix) {
-  // Bind the attribute/buffer set we want.
-  gl.bindVertexArray(vao);
-
-  // Compute the matrix
-  mat4.rotateX(matrix, matrix, degToRad(Math.random() * 3));
-  mat4.multiply(mvpMatrix, viewMatrix, matrix);
-
-  // Set the matrix.
-  gl.uniformMatrix4fv(program.uniformLocations.matrix, false, mvpMatrix);
-  // Draw the geometry.
-  var primitiveType = gl.TRIANGLES;
-  var offset = 0;
-  var count = 16 * 6;
-  gl.drawArrays(primitiveType, offset, count);
-}
-
 // Tell it to use our program (pair of shaders)
 gl.useProgram(program.glProgram);
+gl.uniformMatrix4fv(program.uniformLocations.view, false, viewMatrix);
 
 function render() {
   requestAnimationFrame(render);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  for (var i = 0; i < modelMatrices.length; i++) {
-    drawF(modelMatrices[i]);
+  //var start = performance.now();
+
+  for (var i = 0; i < numFs; i++) {
+    var matrix = modelMatrices[i];
+    mat4.rotateX(matrix, matrix, degToRad(Math.random() * 3));
   }
+
+  var numBatches = numFs / BATCH_SIZE;
+
+  for (var batch = 0; batch < numBatches; batch++) {
+    gl.bufferSubData(
+      gl.UNIFORM_BUFFER,
+      0,
+      typedArray.subarray(
+        batch * BATCH_SIZE * 16,
+        (batch + 1) * BATCH_SIZE * 16
+      )
+    );
+    gl.bindBufferBase(
+      gl.UNIFORM_BUFFER,
+      program.uniformBlocks.model.index,
+      uniformPerSceneBuffer
+    );
+
+    for (var j = 0; j < BATCH_SIZE; j++) {
+      gl.bindVertexArray(vao);
+      gl.uniform1ui(program.uniformLocations.index, j);
+      gl.drawArrays(gl.TRIANGLES, 0, 16 * 6);
+    }
+  }
+
+  //console.log(performance.now() - start);
 }
 
 render();
