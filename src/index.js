@@ -133,7 +133,7 @@ resizeViewport(gl);
 window.addEventListener("resize", _ => resizeViewport(gl));
 
 var BATCH_SIZE = 1024;
-var numFs = BATCH_SIZE * 5;
+var numFs = BATCH_SIZE * 4;
 
 var vertexShaderSource = `#version 300 es
 // an attribute is an input (in) to a vertex shader.
@@ -228,7 +228,7 @@ for (var i = 0; i < numFs; i++) {
 
   var instanceId = i % BATCH_SIZE;
   var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
-  var instanceIds = new Uint32Array(
+  var instanceIds = new Uint16Array(
     new Array(FModel.positions.length).fill(instanceId)
   );
   var instanceBuffer = createBuffer(
@@ -243,7 +243,7 @@ for (var i = 0; i < numFs; i++) {
       instance: {
         buffer: instanceBuffer,
         size: 1,
-        type: gl.UNSIGNED_INT,
+        type: gl.UNSIGNED_SHORT,
         forceInt: true
       },
       position: {
