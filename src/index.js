@@ -109,13 +109,14 @@ var vertexShaderSource = `#version 300 es
 in vec4 a_position;
 in vec4 a_color;
 // A matrix to transform the positions by
-uniform mat4 u_matrix;
+uniform mat4 u_model;
+uniform mat4 u_view;
 // a varying the color to the fragment shader
 out vec4 v_color;
 // all shaders have a main function
 void main() {
   // Multiply the position by the matrix.
-  gl_Position = u_matrix * a_position;
+  gl_Position = u_view * u_model * a_position;
   // Pass the color to the fragment shader.
   v_color = a_color;
 }
@@ -140,26 +141,13 @@ var program = createProgram(
     color: "a_color"
   },
   {
-    matrix: "u_matrix"
+    model: "u_model",
+    view: "u_view"
   }
 );
 
-var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
-
-var vao = createVao(gl, program, {
-  position: {
-    buffer,
-    size: 3,
-    type: gl.FLOAT
-  },
-  color: {
-    buffer,
-    size: 3,
-    type: gl.UNSIGNED_BYTE,
-    normalize: true,
-    offset: FModel.colorsBufferView.byteOffset
-  }
-});
+// Tell it to use our program (pair of shaders)
+gl.useProgram(program.glProgram);
 
 // First let's make some variables
 // to hold the translation
@@ -170,10 +158,13 @@ var zFar = 2000;
 var fieldOfViewRadians = degToRad(60);
 var viewMatrix = mat4.create();
 mat4.perspective(viewMatrix, fieldOfViewRadians, aspect, zNear, zFar);
+gl.uniformMatrix4fv(program.uniformLocations.view, false, viewMatrix);
 
-var modelMatrices = [];
+var numFs = 5120;
+var modelMatrices = new Array(numFs);
+var vaos = new Array(numFs);
 
-for (var i = 0; i < 3000; i++) {
+for (var i = 0; i < numFs; i++) {
   var translation = vec3.create();
   vec3.set(
     translation,
@@ -191,36 +182,45 @@ for (var i = 0; i < 3000; i++) {
   var modelMatrix = mat4.create();
   mat4.fromRotationTranslationScale(modelMatrix, rotation, translation, scale);
   modelMatrices[i] = modelMatrix;
+
+  var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
+
+  vaos[i] = createVao(gl, program, {
+    position: {
+      buffer,
+      size: 3,
+      type: gl.FLOAT
+    },
+    color: {
+      buffer,
+      size: 3,
+      type: gl.UNSIGNED_BYTE,
+      normalize: true,
+      offset: FModel.colorsBufferView.byteOffset
+    }
+  });
 }
-
-var mvpMatrix = mat4.create();
-
-function drawF(matrix) {
-  // Bind the attribute/buffer set we want.
-  gl.bindVertexArray(vao);
-
-  // Compute the matrix
-  mat4.rotateX(matrix, matrix, degToRad(Math.random() * 3));
-  mat4.multiply(mvpMatrix, viewMatrix, matrix);
-
-  // Set the matrix.
-  gl.uniformMatrix4fv(program.uniformLocations.matrix, false, mvpMatrix);
-  // Draw the geometry.
-  var primitiveType = gl.TRIANGLES;
-  var offset = 0;
-  var count = 16 * 6;
-  gl.drawArrays(primitiveType, offset, count);
-}
-
-// Tell it to use our program (pair of shaders)
-gl.useProgram(program.glProgram);
 
 function render() {
   requestAnimationFrame(render);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   for (var i = 0; i < modelMatrices.length; i++) {
-    drawF(modelMatrices[i]);
+    var modelMatrix = modelMatrices[i];
+    // Compute the matrix
+    mat4.rotateX(modelMatrix, modelMatrix, degToRad(Math.random() * 3));
+  }
+
+  for (var i = 0; i < modelMatrices.length; i++) {
+    // Bind the attribute/buffer set we want.
+    gl.bindVertexArray(vaos[i]);
+
+    var modelMatrix = modelMatrices[i];
+    // Set the matrix.
+    gl.uniformMatrix4fv(program.uniformLocations.model, false, modelMatrix);
+
+    // Draw the geometry.
+    gl.drawArrays(gl.TRIANGLES, 0, FModel.positions.length / 3);
   }
 }
 
