@@ -68,7 +68,7 @@ function createBuffer(gl, data, target, usage) {
   return buffer;
 }
 
-function createVao(gl, program, attributes) {
+function createVao(gl, program, attributes, indexBuffer) {
   // Create a vertex array object (attribute state)
   var vao = gl.createVertexArray();
   // and make it the one we're currently working with
@@ -100,6 +100,10 @@ function createVao(gl, program, attributes) {
     );
   });
 
+  if (indexBuffer) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  }
+
   return vao;
 }
 
@@ -123,7 +127,7 @@ resizeViewport(gl);
 window.addEventListener("resize", _ => resizeViewport(gl));
 
 var BATCH_SIZE = 1024;
-var numFs = BATCH_SIZE * 18;
+var numFs = BATCH_SIZE * 4;
 
 var vertexShaderSource = `#version 300 es
 // an attribute is an input (in) to a vertex shader.
@@ -176,23 +180,6 @@ var program = createProgram(
   }
 );
 
-var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
-
-var vao = createVao(gl, program, {
-  position: {
-    buffer,
-    size: 3,
-    type: gl.FLOAT
-  },
-  color: {
-    buffer,
-    size: 3,
-    type: gl.UNSIGNED_BYTE,
-    normalize: true,
-    offset: FModel.colorsBufferView.byteOffset
-  }
-});
-
 // First let's make some variables
 // to hold the translation
 
@@ -204,13 +191,14 @@ var viewMatrix = mat4.create();
 mat4.perspective(viewMatrix, fieldOfViewRadians, aspect, zNear, zFar);
 
 var uniformBlockSize = program.uniformBlocks.model.size;
-console.log(uniformBlockSize);
 var uniformPerSceneBuffer = gl.createBuffer();
 gl.bindBuffer(gl.UNIFORM_BUFFER, uniformPerSceneBuffer);
 gl.bufferData(gl.UNIFORM_BUFFER, uniformBlockSize, gl.DYNAMIC_DRAW);
 
 var typedArray = new Float32Array(numFs * 16);
-var modelMatrices = [];
+var modelMatrices = new Array(numFs);
+var vaos = new Array(numFs);
+
 for (var i = 0; i < numFs; i++) {
   var translation = vec3.create();
   vec3.set(
@@ -230,7 +218,46 @@ for (var i = 0; i < numFs; i++) {
   mat4.fromRotationTranslationScale(modelMatrix, rotation, translation, scale);
   typedArray.set(modelMatrix, i * 16);
 
-  modelMatrices.push(typedArray.subarray(i * 16, i * 16 + 16));
+  modelMatrices[i] = typedArray.subarray(i * 16, i * 16 + 16);
+
+  var buffer = createBuffer(gl, FModel.buffer, gl.ARRAY_BUFFER, gl.STATIC_DRAW);
+  var indices = new Uint16Array(FModel.positions.map((v, idx) => idx));
+  var indexBuffer = createBuffer(
+    gl,
+    indices,
+    gl.ELEMENT_ARRAY_BUFFER,
+    gl.STATIC_DRAW
+  );
+
+  vaos[i] = createVao(
+    gl,
+    program,
+    {
+      position: {
+        buffer,
+        size: 3,
+        type: gl.FLOAT
+      },
+      color: {
+        buffer,
+        size: 3,
+        type: gl.UNSIGNED_BYTE,
+        normalize: true,
+        offset: FModel.colorsBufferView.byteOffset
+      }
+    },
+    indexBuffer
+  );
+}
+
+var numBatches = numFs / BATCH_SIZE;
+var batchArrays = new Array(numBatches);
+
+for (var batch = 0; batch < numBatches; batch++) {
+  batchArrays[batch] = typedArray.subarray(
+    batch * BATCH_SIZE * 16,
+    (batch + 1) * BATCH_SIZE * 16
+  );
 }
 
 var mvpMatrix = mat4.create();
@@ -238,6 +265,11 @@ var mvpMatrix = mat4.create();
 // Tell it to use our program (pair of shaders)
 gl.useProgram(program.glProgram);
 gl.uniformMatrix4fv(program.uniformLocations.view, false, viewMatrix);
+gl.bindBufferBase(
+  gl.UNIFORM_BUFFER,
+  program.uniformBlocks.model.index,
+  uniformPerSceneBuffer
+);
 
 function render() {
   requestAnimationFrame(render);
@@ -247,30 +279,22 @@ function render() {
 
   for (var i = 0; i < numFs; i++) {
     var matrix = modelMatrices[i];
-    mat4.rotateX(matrix, matrix, degToRad(Math.random() * 3));
+    mat4.rotateX(matrix, matrix, degToRad(1));
   }
 
-  var numBatches = numFs / BATCH_SIZE;
-
   for (var batch = 0; batch < numBatches; batch++) {
-    gl.bufferSubData(
-      gl.UNIFORM_BUFFER,
-      0,
-      typedArray.subarray(
-        batch * BATCH_SIZE * 16,
-        (batch + 1) * BATCH_SIZE * 16
-      )
-    );
-    gl.bindBufferBase(
-      gl.UNIFORM_BUFFER,
-      program.uniformBlocks.model.index,
-      uniformPerSceneBuffer
-    );
+    gl.bufferSubData(gl.UNIFORM_BUFFER, 0, batchArrays[batch]);
 
     for (var j = 0; j < BATCH_SIZE; j++) {
-      gl.bindVertexArray(vao);
+      var fIndex = BATCH_SIZE * batch + j;
+      gl.bindVertexArray(vaos[fIndex]);
       gl.uniform1ui(program.uniformLocations.index, j);
-      gl.drawArrays(gl.TRIANGLES, 0, 16 * 6);
+      gl.drawElements(
+        gl.TRIANGLES,
+        FModel.positions.length / 3,
+        gl.UNSIGNED_SHORT,
+        0
+      );
     }
   }
 
