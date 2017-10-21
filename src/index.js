@@ -160,7 +160,7 @@ var viewMatrix = mat4.create();
 mat4.perspective(viewMatrix, fieldOfViewRadians, aspect, zNear, zFar);
 gl.uniformMatrix4fv(program.uniformLocations.view, false, viewMatrix);
 
-var numFs = 5120;
+var numFs = 1024 * 4;
 var modelMatrices = new Array(numFs);
 var vaos = new Array(numFs);
 
