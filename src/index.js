@@ -282,6 +282,8 @@ function render() {
     mat4.rotateX(matrix, matrix, degToRad(1));
   }
 
+  // TODO: Sort back to front to prevent overdraw
+
   for (var batch = 0; batch < numBatches; batch++) {
     gl.bufferSubData(gl.UNIFORM_BUFFER, 0, batchArrays[batch]);
 
